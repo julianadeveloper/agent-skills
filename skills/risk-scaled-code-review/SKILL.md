@@ -55,7 +55,7 @@ Aceite URL/número de PR, range local (`base...head`) ou diff colado.
 
 **Obter diff (ordem de preferência):**
 
-1. **Local:** `git diff --no-color -U1 base...head` (use `-U3` em deep) +
+1. **Local:** `git diff --no-color -U1 base...head -- . ':!*.lock' ':!package-lock.json' ':!yarn.lock' ':!pnpm-lock.yaml' ':!composer.lock' ':!Gemfile.lock' ':!poetry.lock' ':!dist/**' ':!build/**' ':!*.min.js' ':!*.min.css'` (use `-U3` em deep) +
    `git log --oneline base..head`.
 2. **PR remoto:** `gh pr view <n> --repo <owner/repo>` e
    `gh pr diff <n> --repo <owner/repo>`.

@@ -9,7 +9,7 @@ Governança, ticket e graphify entram só se existirem.
 | | |
 |---|---|
 | Identificador | `risk-scaled-code-review` |
-| Versão | `1.3.0` |
+| Versão | `1.3.1` |
 | Licença | CC-BY-4.0 |
 
 ---
@@ -78,7 +78,7 @@ regressão, auth, dados ou risco de merge (`SKILL.md` description).
 
 ```bash
 # 1) Diff (gh primeiro; MCP é fallback)
-git diff --no-color -U1 origin/main...HEAD
+git diff --no-color -U1 origin/main...HEAD -- . ':!*.lock' ':!package-lock.json' ':!yarn.lock' ':!pnpm-lock.yaml' ':!composer.lock' ':!Gemfile.lock' ':!poetry.lock' ':!dist/**' ':!build/**' ':!*.min.js' ':!*.min.css'
 gh pr view 123 --repo owner/repo
 gh pr diff 123 --repo owner/repo
 
