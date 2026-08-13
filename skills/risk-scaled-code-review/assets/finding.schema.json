@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CodeReviewFinding",
+  "description": "Achado de code review antes da filtragem por confiança (skill risk-scaled-code-review).",
+  "type": "object",
+  "required": ["file", "line", "category", "severity", "summary", "evidence", "confidence"],
+  "additionalProperties": false,
+  "properties": {
+    "file": {
+      "type": "string",
+      "description": "Caminho relativo à raiz do repositório."
+    },
+    "line": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Linha (1-based) no lado novo do diff."
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "compile_or_runtime_failure",
+        "behavior_regression",
+        "logic_error",
+        "security_vulnerability",
+        "data_integrity",
+        "explicit_policy_violation",
+        "missing_specific_test",
+        "scope_too_large",
+        "minor_improvement"
+      ]
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low"],
+      "description": "low = minor → entrega 🟢 Sugestão"
+    },
+    "summary": {
+      "type": "string",
+      "description": "Título curto (vai para a primeira linha do comentário PIA)."
+    },
+    "evidence": {
+      "type": "string",
+      "description": "Mecanismo demonstrável — bloco Problema do formato PIA."
+    },
+    "impact": {
+      "type": "string",
+      "description": "Consequência concreta — bloco Impacto do formato PIA."
+    },
+    "suggested_fix": {
+      "type": "string",
+      "description": "Correção ou pergunta — bloco Ação do formato PIA."
+    },
+    "confidence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tests_run": { "type": "array", "items": { "type": "string" } },
+        "static_analysis": { "type": "array", "items": { "type": "string" } },
+        "repository_evidence": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}
