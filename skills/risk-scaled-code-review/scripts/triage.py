@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Triage determinístico de diff para risk-scaled-code-review.
 
-Decide tier (lite/standard/deep/split), especialistas e use_graphify.
+Decide tier (lite/standard/deep/split) e especialistas.
 
 Uso:
-    python triage.py --range origin/main...HEAD
     git diff origin/main...HEAD | python triage.py --input -
+    python triage.py --range origin/main...HEAD
     python triage.py --input mudanca.diff --force-tier deep
 """
 from __future__ import annotations
@@ -15,7 +15,6 @@ import json
 import re
 import subprocess
 import sys
-from pathlib import Path
 
 LITE_MAX_FILES = 8
 LITE_MAX_LINES = 200
@@ -37,7 +36,7 @@ SIGNAL_PATTERNS: list[tuple[str, list[re.Pattern[str]]]] = [
     (
         "security",
         [
-            re.compile(r"\b(password|passwd|secret|api[_-]?key|private[_-]?key|token|jwt|bearer|oauth)\b", re.I),
+            re.compile(r"\b(password|passwd|secret|api[_-]?key|private[_-]?key|jwt|bearer|oauth)\b", re.I),
             re.compile(r"\b(auth|authorize|permission|rbac|acl|sanitize|encrypt|decrypt|crypto)\b", re.I),
             re.compile(r"\b(cpf|cnpj|lgpd|pii|gdpr|ssn)\b", re.I),
             re.compile(r"(jwtAuthMiddleware|permissionsMiddleware|tokenDecode)", re.I),
@@ -47,22 +46,30 @@ SIGNAL_PATTERNS: list[tuple[str, list[re.Pattern[str]]]] = [
         "async",
         [
             re.compile(r"\b(kafka|pubsub|pub.?sub|bull|bee-queue|sqs|rabbitmq|amqp|consumer|producer|subscriber)\b", re.I),
-            re.compile(r"\b(queue|worker|job|cron|agenda|sidekiq)\b", re.I),
+            re.compile(r"\b(queue|worker|cron|agenda|sidekiq)\b", re.I),
         ],
     ),
     (
         "data",
         [
-            re.compile(r"\b(migration|schema|mongoose|sequelize|prisma|typeorm|knex)\b", re.I),
+            re.compile(r"\b(migration|mongoose|sequelize|prisma|typeorm|knex)\b", re.I),
             re.compile(r"\b(transaction|idempoten|mongodb|postgres|mysql|redis)\b", re.I),
             re.compile(r"(migrations?/|\.sql\b)", re.I),
         ],
     ),
 ]
 
+# Sinais fracos: genéricos demais para disparar o especialista sozinho.
+# Entram só com sinal forte, path hint ou >= 2 ocorrências no blob.
+WEAK_PATTERNS: dict[str, list[re.Pattern[str]]] = {
+    "security": [re.compile(r"\btoken\b", re.I)],
+    "async": [re.compile(r"\bjob\b", re.I)],
+    "data": [re.compile(r"\bschema\b", re.I)],
+}
+
 PATH_HINTS: list[tuple[str, list[re.Pattern[str]]]] = [
     ("observability", [re.compile(r"(logger|logging|observab|metric|telemetry)", re.I)]),
-    ("security", [re.compile(r"(auth|security|middleware|permission|crypto)", re.I)]),
+    ("security", [re.compile(r"(auth|security|middleware|permission|crypto|token)", re.I)]),
     ("async", [re.compile(r"(worker|consumer|producer|queue|job|pubsub|kafka)", re.I)]),
     ("data", [re.compile(r"(migration|repository|model|schema|entity)", re.I)]),
 ]
@@ -87,18 +94,6 @@ CROSS_REPO_PATH_HINTS: list[re.Pattern[str]] = [
     re.compile(r"(controllers?|handlers?|routes?|api/|services?/api|graphql|dto|schemas?)/", re.I),
     re.compile(r"(hooks?/use|services?/api|api[_-]?client|clients?/)", re.I),
 ]
-
-GRAPHIFY_MARKERS = (
-    "graphify-out/graph.json",
-    "graphify-out",
-    "graphify",
-    ".graphify",
-    "graphify-export.json",
-    "graphify.json",
-    "graphify/graph.json",
-    ".graphify/graph.json",
-)
-
 
 _TRIAGE_EXCLUDES = [
     "--", ".",
@@ -164,20 +159,25 @@ def detect_signals(diff_text: str, files: list[str]) -> dict[str, list[str]]:
     hits: dict[str, list[str]] = {}
     blob = diff_text
     path_map = dict(PATH_HINTS)
-    for specialist, patterns in SIGNAL_PATTERNS:
-        matched = []
+    strong_map = dict(SIGNAL_PATTERNS)
+
+    def _first(patterns: list[re.Pattern[str]]):
         for pat in patterns:
             m = pat.search(blob)
             if m:
-                matched.append(m.group(0))
-        for f in files:
-            for pat in path_map.get(specialist, []):
-                if pat.search(f):
-                    matched.append(f"path:{f}")
-        if matched:
+                yield m.group(0)
+
+    for specialist in sorted(set(strong_map) | set(WEAK_PATTERNS)):
+        strong_hits = list(_first(strong_map.get(specialist, [])))
+        weak_hits: list[str] = []
+        for pat in WEAK_PATTERNS.get(specialist, []):
+            weak_hits.extend(m.group(0) for m in pat.finditer(blob))
+        path_hits = [f"path:{f}" for f in files if any(pat.search(f) for pat in path_map.get(specialist, []))]
+        if strong_hits or path_hits or len(weak_hits) >= 2:
+            merged = strong_hits + weak_hits + path_hits
             seen: set[str] = set()
-            uniq = []
-            for item in matched:
+            uniq: list[str] = []
+            for item in merged:
                 key = item.lower()
                 if key not in seen:
                     seen.add(key)
@@ -206,32 +206,6 @@ def detect_cross_repo(diff_text: str, files: list[str]) -> list[str]:
             seen.add(key)
             uniq.append(item)
     return uniq[:12]
-
-
-def graphify_available(cwd: Path | None = None) -> dict:
-    root = cwd or Path.cwd()
-    found: list[str] = []
-    for marker in GRAPHIFY_MARKERS:
-        p = root / marker
-        if p.exists():
-            try:
-                found.append(str(p.relative_to(root)))
-            except ValueError:
-                found.append(str(p))
-    pkg = root / "package.json"
-    if pkg.is_file():
-        try:
-            data = json.loads(pkg.read_text(encoding="utf-8"))
-            scripts = data.get("scripts") or {}
-            if any("graphify" in str(k).lower() or "graphify" in str(v).lower() for k, v in scripts.items()):
-                found.append("package.json:graphify-script")
-        except (OSError, json.JSONDecodeError):
-            pass
-    return {
-        "available": bool(found),
-        "markers": found,
-        "canonical_dir": "graphify-out" if (root / "graphify-out" / "graph.json").is_file() else None,
-    }
 
 
 def choose_tier(stats: dict, signals: dict, meta_text: str, force_tier: str | None) -> tuple[str, list[str]]:
@@ -277,40 +251,19 @@ def triage_plan(
     diff_text: str,
     meta_text: str = "",
     force_tier: str | None = None,
-    cwd: Path | None = None,
 ) -> dict:
     stats = analyze_diff(diff_text)
     signals = detect_signals(diff_text, stats["files"])
     cross_hits = detect_cross_repo(diff_text, stats["files"])
     tier, reasons = choose_tier(stats, signals, meta_text, force_tier)
-    g = graphify_available(cwd)
-
-    specialists = sorted(signals.keys())
-    use_graphify = False
-    if tier == "deep" and g["available"]:
-        use_graphify = True
-    elif tier == "standard" and g["available"] and (specialists or stats["file_count"] >= 5):
-        use_graphify = True
-    elif tier == "lite" and g["available"] and ("async" in signals or "data" in signals):
-        use_graphify = True
-
-    token_hint = {
-        "lite": "revisão inline do orquestrador; sem subagentes paralelos",
-        "standard": "core investigators + especialistas acionados + juiz",
-        "deep": "pipeline completo + histórico sob demanda + juiz por achado",
-        "split": "não investigar; pedir quebra do PR",
-    }.get(tier, "")
 
     return {
         "tier": tier,
         "reasons": reasons,
-        "specialists": specialists,
+        "specialists": sorted(signals.keys()),
         "signals": signals,
         "needs_cross_repo_check": bool(cross_hits),
         "cross_repo_signals": cross_hits,
-        "use_graphify": use_graphify,
-        "graphify_available": g["available"],
-        "graphify_markers": g["markers"],
         "stats": {
             "file_count": stats["file_count"],
             "added": stats["added"],
@@ -319,32 +272,7 @@ def triage_plan(
             "files": stats["files"],
         },
         "core_investigators": [] if tier == "lite" else ["diff-reviewer", "logic-reviewer"],
-        "token_budget_hint": token_hint,
-        "recommendation": _recommendation(
-            tier, specialists, use_graphify, g["available"], bool(cross_hits),
-        ),
     }
-
-
-def _recommendation(
-    tier: str,
-    specialists: list[str],
-    use_graphify: bool,
-    g_avail: bool,
-    needs_cross_repo: bool = False,
-) -> str:
-    if tier == "split":
-        return "Peça quebra do PR antes de review detalhado."
-    parts = [f"Tier {tier}."]
-    if specialists:
-        parts.append(f"Especialistas: {', '.join(specialists)}.")
-    if needs_cross_repo:
-        parts.append("Contrato cross-repo: verificar companion (perguntar se desconhecido).")
-    if use_graphify:
-        parts.append("Consulte graphify para blast radius.")
-    elif not g_avail:
-        parts.append("Graphify indisponível — blast via grep.")
-    return " ".join(parts)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -354,7 +282,6 @@ def main(argv: list[str] | None = None) -> int:
     src.add_argument("--input", help="arquivo diff ou '-' para stdin")
     parser.add_argument("--meta", default="", help="título/corpo da task para hints")
     parser.add_argument("--force-tier", choices=["lite", "standard", "deep", "split"])
-    parser.add_argument("--cwd", default=".", help="Raiz do repo para detectar graphify.")
     parser.add_argument(
         "--no-filter", action="store_true",
         help="não excluir lockfiles/dist ao ler diff via --range",
@@ -365,7 +292,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    cwd = Path(args.cwd).resolve()
     try:
         if args.range:
             diff_text = _diff_from_range(args.range, no_filter=getattr(args, "no_filter", False))
@@ -377,13 +303,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"erro: {exc}", file=sys.stderr)
         return 1
 
-    result = triage_plan(diff_text, args.meta, args.force_tier, cwd)
+    result = triage_plan(diff_text, args.meta, args.force_tier)
     indent = 2 if args.human else None
     print(json.dumps(result, ensure_ascii=False, indent=indent))
     print(
         f"[triage] tier={result['tier']} specialists={result['specialists']} "
         f"cross_repo={result['needs_cross_repo_check']} "
-        f"graphify={result['graphify_available']} use_graphify={result['use_graphify']} "
         f"lines={result['stats']['changed_lines']} files={result['stats']['file_count']}",
         file=sys.stderr,
     )

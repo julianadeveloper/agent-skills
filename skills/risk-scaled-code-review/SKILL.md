@@ -2,7 +2,7 @@
 name: risk-scaled-code-review
 description: >-
   Code review que escala com o risco (tiers lite/standard/deep/split):
-  triage determinístico, blast radius (graphify ou grep), análise de acoplamento e
+  triage determinístico, blast radius (grep), análise de acoplamento e
   regressão, especialistas sob demanda, confiança ≥80, checklists core + overlay
   de domínio opcional, classificação 🔴/🟡/🟢 e veredito coerente. Use quando
   pedirem revisar PR/diff, review crítico, validar regressão,
@@ -24,11 +24,10 @@ nas ferramentas disponíveis.
 | Dependência | Obrigatória? | Uso |
 |-------------|--------------|-----|
 | `git` | Sim | `git diff` / ranges e hunks |
-| Python 3 | Sim | `scripts/triage.py`, `scripts/query_graph.py` |
+| Python 3 | Sim | `scripts/triage.py` |
 | `gh` | Só PR remoto / postar | `gh pr view`, `gh pr diff`, `gh pr comment` |
 | MCP GitHub | Fallback p/ GHE sem token | `pull_request_read` |
 | `GH_HOST` / `GITHUB_API_URL` | Opcional (Enterprise) | Base da API se usar REST direto |
-| Graphify (`graphify-out/graph.json`) | Opcional | Blast radius transitivo; senão Grep |
 | Arquivos de governança no repo | Opcional | Policy-reviewer se existirem |
 | Fonte de requisito (PR/issue/Jira/MCP) | Opcional | Intenção da mudança |
 
@@ -38,7 +37,7 @@ Se opcional faltar, declare a degradação na entrega — **não aborte** a revi
 
 1. **Intenção quando houver** — PR/issue/ticket esclarecem mudança deliberada vs regressão; sem isso, derive do diff e do histórico próximo.
 2. **Triage barato, investigação cara** — `scripts/triage.py` manda no plano.
-3. **Acoplamento sempre** — quem chama / importa / consome o contrato alterado (graphify ou Grep).
+3. **Acoplamento sempre** — quem chama / importa / consome o contrato alterado (Grep).
 4. **Evidência ou silêncio** — confiança ≥ **80** para publicar.
 5. **Minor é sugestão** — `low` → 🟢; não bloqueia merge.
 6. **Veredito coerente** — severidade manda, não o tom positivo da direção.
@@ -80,25 +79,24 @@ tracker (ex. Jira MCP) **só se disponível**. Sem requisito externo, reconstrua
 antes/depois a partir do diff.
 
 **Done quando:** diff obtido + lista do que existe/não existe (governança,
-ticket, graphify).
+ticket).
 
 ### Passo 1 — Triage (obrigatório)
 
 ```bash
-python scripts/triage.py --range origin/main...HEAD
-# ou
-git diff origin/main...HEAD | python scripts/triage.py --input -
+# reusa o diff do Passo 0 (não refaça git diff):
+git diff --no-color -U1 origin/main...HEAD -- . ':!*.lock' ':!dist/**' ... | python scripts/triage.py --input -
 # forçar profundidade:
-python scripts/triage.py --range origin/main...HEAD --force-tier deep
+python scripts/triage.py --input mudanca.diff --force-tier deep
 ```
 
 Obedeça `tier` e `specialists` do JSON.
 
-| Tier | Quando | O que roda |
-|------|--------|------------|
-| `lite` | PR pontual | Orquestrador inline; sem subagentes |
-| `standard` | Default | Core + especialistas acionados + juiz |
-| `deep` | Alto risco / diff grande | Pipeline completo + blast obrigatório |
+| Tier | Quando | Investigação |
+|------|--------|--------------|
+| `lite` | PR pontual | Inline, sem subagentes: core (+ domain se houver) + especialistas do triage |
+| `standard` | Default | Subagentes `diff-reviewer`, `logic-reviewer` + especialistas acionados + juiz |
+| `deep` | Alto risco / diff grande | Pipeline completo + blast obrigatório + `test-gap-reviewer`; `policy-reviewer` **só se** houver governança |
 | `split` | Diff enorme | Peça quebra; não revise tudo |
 
 **Limiares:** `lines > 1500` ou `files > 40` → `split`; `files ≤ 8` e `lines ≤ 200`
@@ -108,7 +106,7 @@ e sem sinal → `lite`; hint crítico **ou** `lines ≥ 600` **ou** `files ≥ 2
 Só suba de tier se o usuário pedir ("review crítico") ou surgirem fatos novos
 (migração destrutiva, incidente). Anote o motivo na entrega.
 
-**Done quando:** plano (tier, specialists, use_graphify) fixado e seguido.
+**Done quando:** plano (tier, specialists) fixado e seguido.
 
 ### Passo 2 — Contexto mínimo
 
@@ -117,15 +115,14 @@ Monte só o necessário para o tier:
 1. **Intenção** — comportamento antes/depois (do ticket ou do diff).
 2. **Diff por arquivo** — hunks com contexto; nunca um blob único gigante.
 3. **Governança** — só trechos **existentes** e **relevantes aos paths** do diff.
-4. **Blast radius** — consumidores/callers do que mudou:
-   - Se triage `graphify_available: true`:
-     `python scripts/query_graph.py <simbolo-ou-arquivo>`
-     (consumidores transitivos — grafo não entra no contexto inteiro).
-   - Senão: **Grep/leitura de imports e call sites**; declare
-     *aproximação grep — sem acoplamento transitivo*.
+4. **Blast radius** — consumidores/callers do que mudou: **Grep/leitura de
+   imports e call sites** (arquivo usado em outro lugar, símbolo renomeado,
+   throw/erro que propaga via `Promise.all`/`catch`). Grep acha o acoplamento
+   direto; não há grafo transitivo.
 
 Em `deep`, blast é **obrigatório**. Em `standard`, faça blast quando houver
-mudança de contrato/API/export ou especialistas `data`/`async`.
+mudança de contrato/API/export ou especialistas `data`/`async`. Em `lite`, faça
+blast (grep) apenas se o diff renomear/remover export ou mudar assinatura.
 
 **Cross-repo (front ↔ back):** se triage `needs_cross_repo_check: true` **ou**
 o diff tocar contrato de API/payload/auth/evento entre camadas, siga o
@@ -137,7 +134,7 @@ o diff tocar contrato de API/payload/auth/evento entre camadas, siga o
 4. Workspace aberto no companion ajuda, mas **não substitui** este passo — declare degradação se o companion não for acessível.
 
 **Done quando:** intenção + hunks + (governança se houver) + raio de impacto
-com fonte (graphify | grep) + (cross-repo verificado | perguntado | degradado)
+com fonte (grep) + (cross-repo verificado | perguntado | degradado)
 registrados.
 
 ### Passo 3 — Investigar
@@ -151,7 +148,8 @@ registrados.
 
 **Subagentes / passada inline:**
 
-- Tier `lite`: leia apenas o bloco **"Regras comuns"** de `references/subagentes.md`.
+- Tier `lite`: leia "Regras comuns" + blocos dos **especialistas do triage**;
+  aplique tudo **inline** (sem spawnar subagente).
 - Tier `standard` / `deep`: leia "Regras comuns" + os blocos dos
   **especialistas listados pelo triage** (somente eles).
 
@@ -167,12 +165,6 @@ Foco da análise (sempre, qualquer repo):
 - Checklists core cujo gatilho o diff acionar (`references/checklists-core.md`)
 - Overlay `references/checklists-domain-*.md` **somente se o arquivo existir** e o
   gatilho do overlay casar com o diff
-
-| Tier | Como |
-|------|------|
-| `lite` | Inline: core (+ domain se houver) + especialistas do triage |
-| `standard` | Subagentes: `diff-reviewer`, `logic-reviewer` + especialistas |
-| `deep` | Como standard + `test-gap-reviewer`; `policy-reviewer` **só se** houver governança |
 
 Retorno interno: JSON conforme `assets/finding.schema.json` — **não publique ainda**.
 
@@ -196,7 +188,8 @@ Aplique os **7 critérios** (todos obrigatórios):
 evidência incompleta · 75 real e importante · 100 verificável e alto impacto.
 
 - `lite` com ≤3 achados: auto-julgamento inline
-- Demais: juiz por achado (`references/subagentes.md`)
+- `standard`: um único juiz em lote — todos os candidatos de uma vez (`references/subagentes.md`)
+- `deep`: juiz por achado
 
 Atribua `confidence` 0–100 e `severity` (`critical` | `high` | `medium` | `low`).
 
@@ -212,22 +205,14 @@ Atribua `confidence` 0–100 e `severity` (`critical` | `high` | `medium` | `low
 
 Dedupe por `(file, line, category)` mantendo o de maior confidence.
 
-| severity | Entrega |
-|----------|---------|
-| `critical`, `high` | 🔴 Crítico |
-| `medium` | 🟡 Bloqueante |
-| `low` (minor) | 🟢 Sugestão |
+Classificação 🔴/🟡/🟢: `references/entrega.md` §Classificação.
 
 Só `publish` (≥80) na review. `hold` só em métricas internas.
 
 ### Modo bot vs modo completo
 
-| Modo | Quando | 🟢 |
-|------|--------|-----|
-| **Bot** (default ao postar) | “posta no PR” | Omitir |
-| **Completo** | “review completo” / “incluir sugestões” | Incluir |
-
-🔴 e 🟡 ≥80 entram nos dois modos.
+**Modo bot** (default ao postar) omite 🟢; **modo completo** inclui — ver
+`references/entrega.md` §Modo bot vs completo. 🔴 e 🟡 ≥80 entram nos dois modos.
 
 **Done quando:** lista publicada = só publish; classificação 🔴/🟡/🟢 aplicada.
 
@@ -235,7 +220,7 @@ Só `publish` (≥80) na review. `hold` só em métricas internas.
 
 Formato, classificação e veredito: `references/entrega.md`. Ordem:
 
-1. Contexto + tier (+ motivo se `deep`/`split`) + degradações (sem governança / sem graphify / sem ticket / cross-repo)
+1. Contexto + tier (+ motivo se `deep`/`split`) + degradações (sem governança / sem ticket / cross-repo)
 2. Raio de impacto (+ companion se cross-repo)
 3. Achados: 🔴 → 🟡 → 🟢 (se completo)
 4. Perguntas em aberto (intenção/produto **ou** companion não informado — não nits)
@@ -255,24 +240,20 @@ gh pr comment <n> --repo <owner/repo> --body-file review.md
 
 ## Só comente o que passa nos 7 critérios
 
-Publique apenas achado verificável, localizado, com mecanismo e impacto concreto.
 Estilo isolado, nit, preexistente, “faltam testes” genérico e o que linter/CI já
 cobre ficam de fora — viram silêncio ou hold, não comentário ao autor.
 
 ## Hotfix / `release/*`
 
-Se houver governança **e** a task for hotfix/release urgente:
-`explicit_policy_violation` → 🟡 ou 🟢 (dívida), nunca 🔴 só por path legado.
-Cite a regra e peça registro no PR.
-
-Sem governança no repo: ignore esta seção.
+Com governança, task hotfix/release urgente: `explicit_policy_violation` → 🟡/🟢
+(dívida), nunca 🔴 — ver `references/entrega.md` §Anti-padrões e
+`references/subagentes.md` (policy-reviewer). Sem governança: ignore.
 
 ## Scripts
 
 | Script | Função |
 |--------|--------|
-| `scripts/triage.py` | Tier + especialistas + sinais (expõe `graphify_available`) |
-| `scripts/query_graph.py` | Blast radius via graphify **só se disponível**; senão tool Grep |
+| `scripts/triage.py` | Tier + especialistas + sinais |
 
 ## Referências
 

@@ -32,7 +32,7 @@ OBJETIVO DA MUDANÇA: {{titulo_descricao_ou_derivado_do_diff}}
 REGRA / COMPORTAMENTO: {{antes_depois}}
 ARQUIVOS ALTERADOS: {{lista}}
 DIFF: já carregado acima (Passo 0–2)
-BLAST RADIUS: {{consumidores_graphify_ou_grep}}
+BLAST RADIUS: {{consumidores via grep}}
 CROSS-REPO: {{companion verificado | path | "sinal sem companion — perguntar" | "sem sinal"}}
 GOVERNANÇA: {{trechos se existirem; senão "nenhuma no repo"}}
 CHECKLISTS: entrega.md §Classificação; checklists-core.md sempre;

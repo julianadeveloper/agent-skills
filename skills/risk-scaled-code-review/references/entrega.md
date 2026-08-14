@@ -145,7 +145,7 @@ do status de conflito do contrato atual.
 
 1. **Metadados** — PR/branch, tier, degradações (sem governança / grep / sem ticket / cross-repo)
 2. **Contexto** — regra/comportamento alterado, antes/depois
-3. **Raio de impacto** — consumidores/superfícies (fonte: graphify ou grep; + companion se houver)
+3. **Raio de impacto** — consumidores/superfícies (fonte: grep; + companion se houver)
 4. **Achados** — 🔴 → 🟡 → 🟢 (🟢 só se completo)
 5. **Pontos positivos** — opcional (2–4 bullets)
 6. **Perguntas em aberto** — produto/intenção **ou** companion não informado
@@ -158,6 +158,17 @@ Se vazio após filtro: *"Nenhum problema concreto de alta confiança foi identif
 | Inline no arquivo | Só template PIA + emoji |
 | Summary no PR | Review completa |
 | Chat | Review completa + métricas internas |
+
+---
+
+## Modo bot vs modo completo
+
+| Modo | Quando | 🟢 |
+|------|--------|-----|
+| **Bot** (default ao postar) | “posta no PR” | Omitir |
+| **Completo** | “review completo” / “incluir sugestões” | Incluir |
+
+🔴 e 🟡 ≥80 entram nos dois modos.
 
 ---
 
